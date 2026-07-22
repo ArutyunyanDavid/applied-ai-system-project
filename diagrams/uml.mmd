@@ -1,0 +1,48 @@
+classDiagram
+    %% PawPal+ final UML — matches the implementation in pawpal_system.py.
+    %% Owner has many Pets, Pet has many Tasks, Scheduler uses all three to build a daily plan.
+
+    class Owner {
+        +str name
+        +int minutes_available
+        +list~str~ preferences
+        +list~Pet~ pets
+        +add_pet(pet) None
+        +total_tasks() int
+    }
+
+    class Pet {
+        +str name
+        +str species
+        +list~Task~ tasks
+        +add_task(task) None
+        +edit_task(index, task) None
+    }
+
+    class Task {
+        +str title
+        +int duration_minutes
+        +str priority
+        +str time
+        +str frequency
+        +bool completed
+        +priority_rank() int
+        +mark_complete() None
+    }
+
+    class Scheduler {
+        +Owner owner
+        +sort_by_time(tasks) list~Task~
+        +filter_tasks(pet_name, completed) list~Task~
+        +detect_conflicts() list~str~
+        +handle_recurring_task(task) Task
+        +mark_task_complete(task) Task
+        +generate_plan() list~Task~
+        +explain_plan(plan) str
+    }
+
+    Owner "1" --> "*" Pet : has many
+    Pet "1" --> "*" Task : has many
+    Scheduler ..> Owner : uses
+    Scheduler ..> Pet : uses
+    Scheduler ..> Task : uses
