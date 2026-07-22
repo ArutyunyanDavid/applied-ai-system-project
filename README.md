@@ -16,6 +16,12 @@ conflicts, and explains its choices.
 - **Conflict detection** — warns when two tasks share the same start time.
 - **Recurring tasks** — completing a daily/weekly task generates its next occurrence.
 - **Plain-English explanation** — the scheduler explains why each task was chosen.
+- **🤖 AI Pet-Care Assistant (local RAG, no API key)** — retrieves general
+  care guidance from a local knowledge base using the pet's species, age
+  (life stage), needs, and the owner's question. Retrieved guidance is shown
+  with source/category labels, is woven into the schedule explanation, and is
+  wrapped in guardrails (no diagnosis, emergency warning, graceful fallback).
+  See [AI Pet-Care Assistant](#-ai-pet-care-assistant).
 - **Data persistence (bonus)** — save/load owner, pets, and tasks to `data.json`
   so they persist between runs (see [Data Persistence](#-data-persistence)).
 - **Professional Streamlit UI** — structured `st.table()` displays, sidebar
@@ -23,19 +29,30 @@ conflicts, and explains its choices.
   (see [Professional UI and Output Formatting](#-professional-ui-and-output-formatting)).
 - **Readable CLI output** — `main.py` prints clearly labeled section headings.
 - **Two front ends** — a CLI demo (`main.py`) and a Streamlit UI (`app.py`).
-- **Tested** — 17 automated `pytest` tests covering the core behaviors and edge cases.
+- **Tested** — 72 automated `pytest` tests covering the core behaviors, edge
+  cases, strict `HH:MM` time validation, and the AI assistant (retrieval,
+  guardrails, life-stage/age handling, invalid input, response ordering).
 
-## ▶️ Running PawPal+
+## ▶️ Quick start (exact commands)
 
 ```bash
-# CLI demo (prints an example plan and the smart-scheduling features):
-python main.py
+# 1. Set up an isolated environment and install dependencies.
+python -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
 
-# Streamlit web app:
+# 2. Run the tests (should report "72 passed").
+python -m pytest
+
+# 3a. Run the Streamlit web app (opens http://localhost:8501).
 streamlit run app.py
+
+# 3b. Or run the CLI demo (prints an example plan and scheduling features).
+python main.py
 ```
 
-The Streamlit app opens in your browser (usually http://localhost:8501).
+The AI Pet-Care Assistant runs fully offline — **no API key or internet
+connection is required**.
 
 ## Scenario
 
@@ -135,7 +152,11 @@ Run the test suite with:
 python -m pytest
 ```
 
-The 15 tests in `tests/test_pawpal.py` cover the most important behaviors:
+The 72 tests span two files — `tests/test_pawpal.py` (core scheduling,
+persistence, and time validation) and `tests/test_assistant.py` (the AI
+Pet-Care Assistant).
+
+**Core behaviors (`tests/test_pawpal.py`):**
 
 - **Priority ranking** — a high-priority task ranks higher than a low-priority one.
 - **Adding tasks** — adding a task to a pet increases that pet's task count.
@@ -150,29 +171,160 @@ The 15 tests in `tests/test_pawpal.py` cover the most important behaviors:
 - **Skipping completed tasks** — completed tasks never appear in the generated plan.
 - **Edge cases** — a pet with no tasks yields an empty plan (no crash), and a task
   too long to fit the time budget is skipped while shorter ones still get scheduled.
+- **JSON persistence** — saving an owner (with a pet and task) to a temporary file
+  and loading it back preserves the data; loading a missing file returns `None`.
+- **Strict time validation** — `is_valid_hhmm()` accepts only zero-padded 24-hour
+  `HH:MM` (e.g. `09:00`, `18:30`) and rejects `9:00`, `0900`, `25:00`, `12:60`,
+  empty, and non-string values.
+
+**AI Pet-Care Assistant (`tests/test_assistant.py`):**
+
+- **Life stage** — species-aware age thresholds map to puppy/kitten/adult/senior,
+  and unknown/invalid ages fall back to a neutral stage.
+- **Retrieval** — returns relevant, species-specific guidance; prefers
+  life-stage-appropriate advice; folds the pet's stated needs into the query;
+  respects `top_k`; and always attaches category/source labels.
+- **Age-neutral fallback** — when the age is unknown, retrieval returns *only*
+  age-neutral guidance (never a mix of puppy/adult/senior advice), and `assist()`
+  adds an "enter the age" suggestion for dogs/cats; a known age excludes advice
+  meant for other life stages.
+- **Honest sources** — every knowledge-base source is labelled as local PawPal+
+  guidance (verified in tests), not a fake external citation.
+- **Guardrails & ordering** — emergency keywords trigger an urgent warning that
+  `response_blocks()` always places *before* any guidance; diagnosis-style
+  questions get a "see a vet" note (never a diagnosis); every response ends with
+  the non-diagnostic disclaimer.
+- **Schedule integration** — `explain_plan_with_guidance()` weaves retrieved
+  guidance into the scheduler's own explanation while preserving the base text.
+- **Invalid input / fallback** — empty, whitespace, `None`, or non-string questions
+  return a friendly fallback (never crash); off-topic questions fall back cleanly;
+  unknown species still works via generic guidance.
+- **Backward compatibility** — the new `Pet.age`/`Pet.needs` fields default safely,
+  load from older `data.json` files, and round-trip through save/load.
 
 Passing output:
 
 ```
 ============================= test session starts =============================
 platform win32 -- Python 3.14.5, pytest-9.0.3, pluggy-1.6.0
-rootdir: C:\Users\aruty\Desktop\ai110-module2show-pawpal-starter
+rootdir: C:\Users\aruty\Desktop\applied-ai-system-project
 plugins: anyio-4.13.0
-collected 17 items
+collected 72 items
 
-tests\test_pawpal.py .................                                   [100%]
+tests\test_assistant.py ......................................          [ 52%]
+tests\test_pawpal.py ..................................                  [100%]
 
-============================= 17 passed in 0.08s ==============================
+============================= 72 passed in 0.21s ==============================
 ```
 
-The suite also covers **JSON persistence**: saving an owner (with a pet and task)
-to a temporary file and loading it back preserves the name, pet count, task title,
-and completed status; loading a missing file returns `None` instead of crashing.
-
 Confidence Level: ⭐⭐⭐⭐☆ — The core scheduling behaviors (priority, time budget,
-sorting, filtering, recurrence, conflicts), persistence, and key edge cases are all
-covered. Future improvements could test more complex overlapping-duration conflicts
-and invalid input (e.g. malformed `"HH:MM"` times).
+sorting, filtering, recurrence, conflicts), persistence, the AI assistant
+(retrieval, guardrails, invalid input), and key edge cases are all covered.
+Future improvements could test more complex overlapping-duration conflicts and
+malformed `"HH:MM"` times.
+
+## 🤖 AI Pet-Care Assistant
+
+PawPal+ includes a **local, RAG-style (retrieval-augmented) pet-care
+assistant**. It retrieves relevant general-care guidance from a small,
+hand-curated knowledge base using the pet's **species**, **age (life stage)**,
+**needs**, and the owner's **question** — then presents it with clear
+source/category labels and safety guardrails.
+
+> **No paid API key and no internet connection are required.** Retrieval is a
+> keyword/context-overlap search over local Python data using only the standard
+> library — there is no external LLM call.
+
+### How it works
+
+1. **Knowledge base** (`petcare_kb.py`) — a list of guidance entries, each
+   tagged with a `category` (Nutrition, Exercise, Grooming, Behavior,
+   Enrichment, Senior Care, Health & Safety, …), a `species` (`dog`/`cat`/`any`),
+   a `life_stage`, matching `keywords`, a `source` label, and the `advice` text.
+   **Sources are honest**: every entry is labelled `PawPal+ local guidance:
+   <topic>` because it is PawPal+'s own curated guidance — not a citation to an
+   external publication.
+2. **Retrieval** (`petcare_assistant.py`) — the owner's question and the pet's
+   stated needs are tokenized and scored against each entry's keywords. Scoring
+   filters by species **and life stage**, then boosts stage-appropriate and
+   species-specific advice, and returns the top matches (best first).
+3. **Life stage** — `life_stage_for(species, age)` maps age in years to
+   puppy/kitten/adult/senior using species-aware thresholds (dogs and cats age
+   differently); unknown ages use a neutral stage.
+4. **Age-unknown handling** — when a pet's age is `0`/unknown, retrieval returns
+   **only age-neutral guidance** (it never mixes puppy, adult, and senior advice),
+   and the assistant suggests entering the age for more personalized results.
+5. **Integration** — retrieved guidance affects the app in **two** places, not a
+   separate demo:
+   - a dedicated **"5. 🤖 AI Pet-Care Assistant"** Q&A section in `app.py`, and
+   - guidance **woven directly into the schedule explanation** (via
+     `explain_plan_with_guidance()`) after you generate a plan, so the "Why this
+     plan?" text itself reflects the retrieved care guidance.
+
+### Guardrails (safety)
+
+- **No diagnosis** — the assistant only ever returns general guidance. Questions
+  that look like diagnosis requests ("what disease…", "diagnose…") get an extra
+  "please see a vet" note, and a **non-diagnostic disclaimer is always shown**.
+- **Emergency warning (shown first)** — questions containing urgent keywords
+  (bleeding, seizure, poison/toxic, choking, not breathing, …) surface a
+  prominent "contact your vet / emergency hospital now" warning. The rendering
+  order is centralized in `response_blocks()`, which **guarantees the emergency
+  warning is emitted before any normal guidance** (verified by tests).
+- **Unsupported-input fallback** — empty, whitespace-only, `None`, non-string, or
+  off-topic questions never crash; the assistant returns a friendly, actionable
+  fallback message instead.
+
+### Input validation, exceptions, and logging
+
+- `retrieve()` validates that the question is a non-empty string (raises
+  `ValueError` on bad input); the high-level `assist()` wrapper catches that and
+  any unexpected error so the UI can never crash on a bad question.
+- Events (retrieval counts, emergency hits, validation failures, unexpected
+  errors) are logged through the `pawpal.assistant` logger. `app.py` configures
+  logging via `logging.basicConfig(level=logging.INFO)`.
+
+### Using it in the app
+
+1. Add a pet and (optionally) set its **age** and comma-separated **care needs**
+   in section 2.
+2. Open **"5. 🤖 AI Pet-Care Assistant"**, pick the pet, type a question
+   (e.g. *"How much exercise does my senior dog need?"*), and click
+   **Ask assistant**.
+3. Guidance appears with `[Category]` and `Source:` labels; emergencies and
+   diagnosis notes appear above it; the disclaimer appears below. If the pet's
+   age is unknown, a tip invites you to add it for life-stage-specific advice.
+
+### Reusing it in code
+
+```python
+from pawpal_system import Pet
+from petcare_assistant import assist, response_blocks, explain_plan_with_guidance
+
+result = assist("How often should I feed my puppy?", species="dog", age=0.5)
+for item in result.guidance:
+    print(f"[{item.category}] {item.advice}  (Source: {item.source})")
+print(result.disclaimer)
+
+# Ordered render blocks (emergency always before guidance):
+for kind, payload in response_blocks(result):
+    print(kind)
+
+# Weave guidance into a scheduler explanation string:
+text = explain_plan_with_guidance(
+    "Jordan has 60 minutes available.",
+    [Pet(name="Biscuit", species="dog", age=9, needs=["joints"])],
+)
+```
+
+**Files for this feature:** `petcare_kb.py` (knowledge base + guardrail keyword
+lists, honest local sources), `petcare_assistant.py` (validation, life-stage
+filtering, retrieval, guardrails, `response_blocks()`,
+`explain_plan_with_guidance()`, logging), `pawpal_system.py` (`Pet.age`/
+`Pet.needs` fields, `is_valid_hhmm()`), `app.py` (assistant section, ordered
+rendering, strict time validation, guidance woven into the schedule),
+`tests/test_assistant.py`, `tests/test_pawpal.py`, and
+`diagrams/architecture.mmd`.
 
 ## 📐 Smarter Scheduling
 
@@ -254,9 +406,10 @@ streamlit run app.py
 Then follow these steps in the browser:
 
 1. **Enter owner info** — type your name and how many minutes you have today, then click **Save owner**.
-2. **Add a pet** — enter a pet name and species and click **Add pet**. Repeat for more pets.
-3. **Add tasks** — pick which pet a task is for, set its title, duration, and priority, then click **Add task**.
-4. **Generate the schedule** — click **Generate schedule** to see today's plan.
+2. **Add a pet** — enter a pet name, species, and (optionally) its age and care needs, then click **Add pet**. Repeat for more pets.
+3. **Add tasks** — pick which pet a task is for, set its title, duration, priority, and time (**24-hour `HH:MM`**, e.g. `09:00`; invalid times show a friendly error), then click **Add task**.
+4. **Generate the schedule** — click **Generate schedule** to see today's plan, its explanation, and **AI care notes** tailored to each scheduled pet.
 5. **Read the plan** — the plan is sorted by priority (high → medium → low) and limited by your available time, so lower-priority tasks are skipped once time runs out. An explanation shows why each task was chosen.
+6. **Ask the AI Pet-Care Assistant** — in section 5, pick a pet, type a question (e.g. *"How much exercise does my senior dog need?"*), and click **Ask assistant** for labeled guidance with safety guardrails.
 
 **Screenshot or video** *(optional)*: <!-- Insert a screenshot or link to a demo video here -->

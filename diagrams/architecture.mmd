@@ -1,4 +1,57 @@
 flowchart TD
-    A[User] --> B[Streamlit App]
-    B --> C[Python Logic]
-    C --> D[data.json]
+    %% ===== Main request/response pipeline (numbered left-to-right in time) =====
+    User([" 👤 User / Pet owner "])
+
+    UI["🖥️ Streamlit UI - app.py<br/>owner · pets · tasks · schedule<br/>AI Pet-Care Assistant section"]
+
+    VAL["✅ Validation and Core Logic<br/>is_valid_hhmm time check · input checks<br/>Scheduler - pawpal_system.py"]
+
+    RET["🔎 Retriever - petcare_assistant.py<br/>validate · life-stage filter · retrieve<br/>guardrails - emergency / no-diagnosis / fallback"]
+
+    KB[("📚 Knowledge Base<br/>petcare_kb.py<br/>local guidance entries +<br/>emergency / diagnosis keywords")]
+
+    OUT["🤖 AI Output<br/>ranked guidance + category/source labels<br/>emergency warning first · disclaimer<br/>+ guidance woven into schedule explanation"]
+
+    %% Numbered happy path: input -> UI -> validation/core -> retriever -> KB -> AI output -> user
+    User -->|"1 - input: question + pet species/age/needs"| UI
+    UI -->|"2 - validated input"| VAL
+    VAL -->|"3 - query + pet context"| RET
+    RET -->|"4 - keyword/context search"| KB
+    KB -->|"5 - matched guidance"| RET
+    RET -->|"6 - guardrailed result"| OUT
+    OUT -->|"7 - rendered response"| UI
+    UI -->|"8 - shown to user"| User
+
+    %% ===== Human-in-the-loop review of the AI output =====
+    HUMAN{{"🧑‍⚕️ Human review<br/>owner reads guidance;<br/>disclaimer -> consult a vet<br/>for medical concerns"}}
+    OUT --> HUMAN
+    HUMAN -->|"acts on / verifies advice"| User
+
+    %% ===== Automated tests / evaluator checking the AI output =====
+    TESTS["🧪 Automated tests / evaluator<br/>tests/test_assistant.py + test_pawpal.py<br/>retrieval · guardrails · invalid input ·<br/>age-neutral fallback · ordering"]
+    TESTS -.->|"asserts correctness of"| OUT
+    TESTS -.->|"exercises"| RET
+    TESTS -.->|"validates entries + sources"| KB
+    TESTS -.->|"time validation + scheduling"| VAL
+
+    %% ===== Supporting cross-cutting concerns =====
+    STORE[("💾 data.json<br/>persistent storage")]
+    LOG["📝 logging - pawpal.assistant<br/>retrieval · emergencies · errors"]
+
+    VAL <-->|"save / load owner, pets, tasks"| STORE
+    RET -.->|"events and errors"| LOG
+    UI -.->|"basicConfig"| LOG
+
+    %% ===== Grouping for readability =====
+    subgraph PIPE ["Request → Response pipeline"]
+        UI
+        VAL
+        RET
+        KB
+        OUT
+    end
+
+    subgraph CHECKS ["Oversight of AI output"]
+        HUMAN
+        TESTS
+    end

@@ -1,10 +1,13 @@
 """Basic tests for the PawPal+ core system."""
 
+import pytest
+
 from pawpal_system import (
     Owner,
     Pet,
     Task,
     Scheduler,
+    is_valid_hhmm,
     save_owner_to_json,
     load_owner_from_json,
 )
@@ -216,3 +219,38 @@ def test_load_missing_file_returns_none(tmp_path):
     """Loading a file that does not exist should return None, not crash."""
     missing = tmp_path / "does_not_exist.json"
     assert load_owner_from_json(str(missing)) is None
+
+
+# ---------------------------------------------------------------------------
+# Strict HH:MM time validation.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["00:00", "09:00", "08:00", "18:30", "23:59", "12:05"],
+)
+def test_is_valid_hhmm_accepts_valid_times(value):
+    """Well-formed 24-hour HH:MM strings are accepted."""
+    assert is_valid_hhmm(value) is True
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "9:00",     # hour not zero-padded
+        "0900",     # missing colon
+        "25:00",    # hour out of range
+        "12:60",    # minute out of range
+        "24:00",    # hour out of range
+        "9am",      # not HH:MM at all
+        "12:5",     # minute not two digits
+        "  09:00",  # leading whitespace (UI strips before validating)
+        "",         # empty
+        None,       # non-string
+        930,        # non-string
+    ],
+)
+def test_is_valid_hhmm_rejects_invalid_times(value):
+    """Malformed or out-of-range times are rejected."""
+    assert is_valid_hhmm(value) is False

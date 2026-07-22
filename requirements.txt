@@ -1,2 +1,9 @@
-streamlit>=1.30
-pytest>=7.0
+# PawPal+ dependencies.
+#
+# The local AI Pet-Care Assistant (RAG-style retrieval) needs NO extra
+# packages and NO paid API key — it uses only the Python standard library
+# (logging, re, dataclasses, json). The dependencies below are unchanged
+# from the base app.
+
+streamlit>=1.30   # web UI (app.py)
+pytest>=7.0       # test runner (tests/)

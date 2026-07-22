@@ -9,11 +9,27 @@ the owner's available time, putting the most important tasks first.
 
 import json
 import os
+import re
 from dataclasses import dataclass, field
 
 # Maps a priority word to a number. Higher number = more important.
 # Used so we can sort tasks (high > medium > low).
 PRIORITY_SCORES = {"low": 1, "medium": 2, "high": 3}
+
+# Strict 24-hour HH:MM matcher: hours 00-23, minutes 00-59, zero-padded.
+_TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
+
+
+def is_valid_hhmm(time_str) -> bool:
+    """Return True if ``time_str`` is a valid 24-hour ``HH:MM`` string.
+
+    Strict format: a zero-padded two-digit hour (00-23), a colon, and a
+    two-digit minute (00-59) — e.g. "09:00" or "18:30". Anything else
+    (missing colon, out-of-range values, extra characters, non-strings)
+    returns False so the UI can show a friendly error instead of storing a
+    malformed time.
+    """
+    return isinstance(time_str, str) and bool(_TIME_RE.match(time_str))
 
 
 @dataclass
@@ -79,11 +95,17 @@ class Pet:
     Attributes:
         name: The pet's name (e.g. "Mochi").
         species: The kind of animal (e.g. "dog", "cat", "other").
+        age: The pet's age in years, or None if unknown. Used by the
+            AI pet-care assistant to give life-stage-appropriate guidance.
+        needs: Optional free-text care needs/focus areas (e.g.
+            ["weight management", "anxiety"]) that the assistant can target.
         tasks: All care tasks that belong to this pet.
     """
 
     name: str
     species: str = "other"
+    age: "float | None" = None
+    needs: list = field(default_factory=list)
     tasks: list = field(default_factory=list)
 
     def add_task(self, task: Task) -> None:
@@ -99,13 +121,24 @@ class Pet:
         return {
             "name": self.name,
             "species": self.species,
+            "age": self.age,
+            "needs": self.needs,
             "tasks": [task.to_dict() for task in self.tasks],
         }
 
     @staticmethod
     def from_dict(data: dict) -> "Pet":
-        """Build a Pet (and its tasks) from a dictionary loaded from JSON."""
-        pet = Pet(name=data["name"], species=data.get("species", "other"))
+        """Build a Pet (and its tasks) from a dictionary loaded from JSON.
+
+        ``age`` and ``needs`` are optional so older ``data.json`` files saved
+        before those fields existed still load without error.
+        """
+        pet = Pet(
+            name=data["name"],
+            species=data.get("species", "other"),
+            age=data.get("age"),
+            needs=data.get("needs", []),
+        )
         pet.tasks = [Task.from_dict(task_data) for task_data in data.get("tasks", [])]
         return pet
 

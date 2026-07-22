@@ -1,3 +1,5 @@
+import logging
+
 import streamlit as st
 
 from pawpal_system import (
@@ -5,8 +7,21 @@ from pawpal_system import (
     Pet,
     Task,
     Scheduler,
+    is_valid_hhmm,
     save_owner_to_json,
     load_owner_from_json,
+)
+from petcare_assistant import (
+    assist,
+    explain_plan_with_guidance,
+    response_blocks,
+)
+
+# Configure logging once for the app. Retrieval, guardrail hits, and errors
+# from petcare_assistant flow through the "pawpal" logger hierarchy.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(name)s %(levelname)s %(message)s",
 )
 
 st.set_page_config(page_title="PawPal+", page_icon="🐾", layout="centered")
@@ -84,18 +99,44 @@ st.divider()
 st.header("2. Add a pet")
 
 pet_name = st.text_input("Pet name", value="Mochi")
-species = st.selectbox("Species", ["dog", "cat", "other"])
+col_species, col_age = st.columns(2)
+with col_species:
+    species = st.selectbox("Species", ["dog", "cat", "other"])
+with col_age:
+    # Age is optional; it lets the AI assistant tailor advice by life stage.
+    # 0 means "unknown / not set" so existing behavior is unaffected.
+    age_years = st.number_input(
+        "Age in years (0 = unknown)", min_value=0.0, max_value=40.0, value=0.0, step=1.0
+    )
+needs_text = st.text_input(
+    "Care needs / focus (optional, comma-separated)",
+    value="",
+    help="e.g. weight management, anxiety, senior joints — used by the AI assistant.",
+)
 
 if st.button("Add pet"):
     if pet_name.strip() == "":
         st.warning("Please enter a pet name first.")
     else:
-        owner.add_pet(Pet(name=pet_name, species=species))
+        # Parse optional fields. Age 0 is treated as "unknown" (None).
+        pet_age = float(age_years) if age_years and age_years > 0 else None
+        pet_needs = [n.strip() for n in needs_text.split(",") if n.strip()]
+        owner.add_pet(Pet(name=pet_name, species=species, age=pet_age, needs=pet_needs))
         st.success(f"Added pet: {pet_name} ({species})")
 
 if owner.pets:
     st.write("Your pets:")
-    st.table([{"name": pet.name, "species": pet.species} for pet in owner.pets])
+    st.table(
+        [
+            {
+                "name": pet.name,
+                "species": pet.species,
+                "age": pet.age if pet.age is not None else "—",
+                "needs": ", ".join(pet.needs) if pet.needs else "—",
+            }
+            for pet in owner.pets
+        ]
+    )
 else:
     st.info("No pets yet. Add one above.")
 
@@ -128,19 +169,30 @@ else:
         frequency = st.selectbox("Frequency", ["once", "daily", "weekly"])
 
     if st.button("Add task"):
-        # Find the Pet object the user selected, then add the Task to it.
-        chosen_pet = owner.pets[pet_names.index(chosen_pet_name)]
-        chosen_pet.add_task(
-            Task(
-                title=task_title,
-                duration_minutes=int(duration),
-                priority=priority,
-                time=task_time,
-                frequency=frequency,
-                completed=False,
+        # Validate the time strictly as 24-hour HH:MM before creating the task,
+        # so a malformed time (e.g. "9am", "25:00", "0900") never gets stored.
+        clean_time = task_time.strip()
+        if task_title.strip() == "":
+            st.warning("Please enter a task title first.")
+        elif not is_valid_hhmm(clean_time):
+            st.error(
+                f"'{task_time}' isn't a valid time. Please use 24-hour "
+                "**HH:MM** format, e.g. `09:00` or `18:30`."
             )
-        )
-        st.success(f"Added task '{task_title}' to {chosen_pet_name} at {task_time}.")
+        else:
+            # Find the Pet object the user selected, then add the Task to it.
+            chosen_pet = owner.pets[pet_names.index(chosen_pet_name)]
+            chosen_pet.add_task(
+                Task(
+                    title=task_title,
+                    duration_minutes=int(duration),
+                    priority=priority,
+                    time=clean_time,
+                    frequency=frequency,
+                    completed=False,
+                )
+            )
+            st.success(f"Added task '{task_title}' to {chosen_pet_name} at {clean_time}.")
 
     # Show all tasks across all pets.
     rows = []
@@ -202,9 +254,97 @@ if st.button("Generate schedule"):
                 ]
             )
             st.subheader("Why this plan?")
-            st.info(scheduler.explain_plan(plan))
+
+            # The pets that actually have a task in today's plan.
+            planned_pets = [
+                pet
+                for pet in owner.pets
+                if any(task in plan for task in pet.tasks)
+            ]
+
+            # Weave AI-retrieved, species/age/needs-aware guidance directly into
+            # the scheduler's own explanation, so the retrieved knowledge is a
+            # visible part of the schedule explanation (not a separate panel).
+            explanation = explain_plan_with_guidance(
+                scheduler.explain_plan(plan), planned_pets
+            )
+            st.info(explanation)
             st.caption(
                 "Tasks are sorted highest priority first (then by time), and added "
                 "only while they fit within your available minutes. Completed tasks "
-                "are skipped."
+                "are skipped. Care guidance is retrieved from the local knowledge "
+                "base and is general information, not veterinary advice."
             )
+
+st.divider()
+
+# ---------------------------------------------------------------------------
+# 5. AI Pet-Care Assistant (local RAG-style retrieval, no paid API).
+# ---------------------------------------------------------------------------
+st.header("5. 🤖 AI Pet-Care Assistant")
+st.caption(
+    "Ask a general pet-care question. PawPal+ retrieves guidance from a local "
+    "knowledge base using your pet's species, age, and needs — no internet or "
+    "paid API required."
+)
+
+if not owner.pets:
+    st.info("Add a pet above to use the AI Pet-Care Assistant.")
+else:
+    assistant_pet_names = [pet.name for pet in owner.pets]
+    chosen_assistant_pet = st.selectbox(
+        "Ask about which pet?", assistant_pet_names, key="assistant_pet"
+    )
+    question = st.text_input(
+        "Your question",
+        value="How much exercise does my pet need?",
+        key="assistant_question",
+    )
+
+    if st.button("Ask assistant"):
+        # Look up the selected pet so we can pass its species/age/needs context.
+        selected_pet = owner.pets[assistant_pet_names.index(chosen_assistant_pet)]
+
+        # assist() never raises: it validates input and returns a structured
+        # result with guardrails already applied.
+        result = assist(
+            question,
+            species=selected_pet.species,
+            age=selected_pet.age,
+            needs=selected_pet.needs,
+        )
+
+        # response_blocks() enforces the display order: an emergency warning
+        # (when present) always comes BEFORE any normal guidance. We just walk
+        # the blocks and render each with the appropriate Streamlit widget.
+        for kind, payload in response_blocks(result):
+            if kind == "emergency":
+                # Prominent veterinary emergency warning, shown first.
+                st.error(payload)
+            elif kind == "diagnosis":
+                st.warning(payload)
+            elif kind == "guidance":
+                stage_label = (
+                    f" · life stage: {result.life_stage}"
+                    if result.life_stage != "any"
+                    else ""
+                )
+                st.markdown(
+                    f"**Guidance for {selected_pet.name} "
+                    f"({selected_pet.species}{stage_label}):**"
+                )
+                for item in payload:
+                    # Each result carries clear source/category labels.
+                    st.markdown(
+                        f"- **[{item.category}]** {item.advice}  \n"
+                        f"  _Source: {item.source}_"
+                    )
+            elif kind == "fallback":
+                # Unsupported-input / no-match fallback.
+                st.info(payload)
+            elif kind == "age_suggestion":
+                # Age unknown: only age-neutral advice was shown; nudge for age.
+                st.info(f"💡 {payload}")
+            elif kind == "disclaimer":
+                # Standard non-diagnostic disclaimer, always shown last.
+                st.caption(payload)
